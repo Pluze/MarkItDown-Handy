@@ -26,7 +26,8 @@ $Arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
 
 Remove-Item -Recurse -Force $BundleDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $BuildDir, $OutDir, $RuntimeDir, $AppDir, $ToolsDir, $TessdataDir | Out-Null
-Copy-Item $Src (Join-Path $AppDir "markitdown_handy.py") -Force
+$AppSource = Join-Path $AppDir "markitdown_handy.py"
+Copy-Item $Src $AppSource -Force
 
 $VenvDir = Join-Path $BuildDir "venv"
 if (-not (Test-Path $VenvDir)) {
@@ -41,13 +42,123 @@ if (-not (Test-Path $Python)) {
 & $Python -m pip install --upgrade pip
 & $Python -m pip install --upgrade "markitdown[all]" tkinterdnd2 ocrmypdf
 
-& $Python - <<'PYCHECK'
+@'
 import importlib.util
 missing = [m for m in ["markitdown", "tkinterdnd2", "ocrmypdf"] if not importlib.util.find_spec(m)]
 if missing:
     raise SystemExit(f"Missing required modules: {missing}")
 print("Python module check OK")
-PYCHECK
+'@ | & $Python -
+
+# Patch only the bundled copy so the Windows portable app can use runtime\Scripts
+# and Windows shell quoting without changing the source-tree default behavior.
+@'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+start = text.index("def find_ocrmypdf_executable():")
+end = text.index("def safe_stem(path):", start)
+replacement = r'''def _shell_quote(value):
+    if os.name == "nt":
+        return subprocess.list2cmdline([str(value)])
+    return shlex.quote(str(value))
+
+
+def _bundled_bin_dir(env_dir):
+    scripts_dir = env_dir / "Scripts"
+    if scripts_dir.exists():
+        return scripts_dir
+    return env_dir / "bin"
+
+
+def _bundled_executable(env_dir, name):
+    bin_dir = _bundled_bin_dir(env_dir)
+    names = [name]
+    if os.name == "nt":
+        names = [f"{name}.exe", f"{name}.bat", f"{name}.cmd", name]
+    for item in names:
+        candidate = bin_dir / item
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def find_ocrmypdf_executable():
+    env_dir = bundled_env_dir()
+    if env_dir is not None:
+        bundled_cli = _bundled_executable(env_dir, "ocrmypdf")
+        bundled_python = _bundled_executable(env_dir, "python")
+        if bundled_cli is not None:
+            return _shell_quote(bundled_cli)
+        if bundled_python is not None:
+            return f"{_shell_quote(bundled_python)} -m ocrmypdf"
+
+    candidates = [
+        "/opt/homebrew/bin/ocrmypdf",
+        "/usr/local/bin/ocrmypdf",
+    ]
+    for item in candidates:
+        if Path(item).exists():
+            return item
+    return shutil.which("ocrmypdf") or "ocrmypdf"
+
+
+def default_markitdown_command():
+    env_dir = bundled_env_dir()
+    if env_dir is not None:
+        bundled_cli = _bundled_executable(env_dir, "markitdown")
+        bundled_python = _bundled_executable(env_dir, "python")
+        if bundled_cli is not None:
+            return _shell_quote(bundled_cli)
+        if bundled_python is not None:
+            return f"{_shell_quote(bundled_python)} -m markitdown"
+    return f"{_shell_quote(find_conda_executable())} run -n {CONDA_ENV_NAME} markitdown"
+
+
+def add_gui_paths(env):
+    env = env.copy()
+    extra_paths = []
+    path_sep = os.pathsep
+
+    env_dir = bundled_env_dir()
+    if env_dir is not None:
+        bin_dir = _bundled_bin_dir(env_dir)
+        extra_paths.append(str(bin_dir))
+        tools_dir = resource_dir() / "tools"
+        if tools_dir.exists():
+            extra_paths.append(str(tools_dir))
+
+        if os.name == "nt":
+            dll_dirs = [str(env_dir), str(bin_dir)]
+            old_path = env.get("PATH", "")
+            env["PATH"] = path_sep.join(extra_paths + dll_dirs + ([old_path] if old_path else []))
+        else:
+            old_dyld = env.get("DYLD_LIBRARY_PATH", "")
+            env["DYLD_LIBRARY_PATH"] = path_sep.join([str(env_dir / "lib")] + ([old_dyld] if old_dyld else []))
+
+        tessdata = resource_dir() / "tessdata"
+        if tessdata.exists():
+            env["TESSDATA_PREFIX"] = str(tessdata)
+
+    extra_paths.extend([
+        "/opt/anaconda3/bin",
+        str(Path.home() / "anaconda3/bin"),
+        str(Path.home() / "miniconda3/bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        str(Path(sys.executable).parent),
+    ])
+    env["PATH"] = path_sep.join(extra_paths + [env.get("PATH", "")])
+    return env
+
+
+'''
+path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+'@ | & $Python - $AppSource
 
 Copy-Item -Recurse -Force (Join-Path $VenvDir "*") $RuntimeDir
 
@@ -80,8 +191,6 @@ if (Test-Path `$Tessdata) { `$env:TESSDATA_PREFIX = `$Tessdata }
 & (Join-Path `$AppDir 'runtime\Scripts\python.exe') (Join-Path `$AppDir 'app\markitdown_handy.py')
 "@ | Set-Content -Encoding UTF8 $LauncherPs1
 
-# Put Windows-friendly command shims in runtime\bin because the app's bundled-runtime lookup
-# was originally written for macOS conda-pack bundles.
 $RuntimeBin = Join-Path $RuntimeDir "bin"
 New-Item -ItemType Directory -Force $RuntimeBin | Out-Null
 @"
@@ -94,8 +203,6 @@ New-Item -ItemType Directory -Force $RuntimeBin | Out-Null
 "@ | Set-Content -Encoding ASCII (Join-Path $RuntimeBin "ocrmypdf.bat")
 Copy-Item -Force (Join-Path $RuntimeScripts "python.exe") (Join-Path $RuntimeBin "python.exe")
 
-# Best-effort copy of external OCR/PDF tools available on the build runner.
-# The app still works for direct MarkItDown conversion without these tools.
 $ToolNames = @(
     "tesseract.exe",
     "gswin64c.exe",
@@ -128,13 +235,13 @@ foreach ($candidate in $TessCandidates) {
     }
 }
 
-& $RuntimePython - <<'PYCHECK'
+@'
 import importlib.util
 for mod in ["markitdown", "tkinterdnd2", "ocrmypdf"]:
     if not importlib.util.find_spec(mod):
         raise SystemExit(f"Bundled module missing: {mod}")
 print("Bundled runtime check OK")
-PYCHECK
+'@ | & $RuntimePython -
 
 $ZipPath = Join-Path $OutDir "MarkItDown_Handy_v${AppVersion}_portable_Windows_${Arch}.zip"
 Remove-Item -Force $ZipPath -ErrorAction SilentlyContinue
