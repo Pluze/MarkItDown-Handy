@@ -42,7 +42,7 @@ cat > "$MACOS_DIR/MarkItDownHandy" <<'LAUNCHER'
 RESOURCE_DIR="$(cd "$(dirname "$0")/../Resources" && pwd)"
 ENV_NAME="${ENV_NAME:-markitdown}"
 
-export PATH="/opt/anaconda3/bin:$HOME/anaconda3/bin:$HOME/miniconda3/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="/opt/anaconda3/bin:$HOME/anaconda3/bin:$HOME/miniconda3/bin:/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/Caskroom/miniforge/base/bin:/usr/local/Caskroom/miniforge/base/bin:$PATH"
 
 find_conda_sh() {
   for file in \
@@ -50,7 +50,9 @@ find_conda_sh() {
     "$HOME/anaconda3/etc/profile.d/conda.sh" \
     "$HOME/miniconda3/etc/profile.d/conda.sh" \
     "/opt/homebrew/Caskroom/miniforge/base/etc/profile.d/conda.sh" \
-    "/opt/homebrew/anaconda3/etc/profile.d/conda.sh"
+    "/usr/local/Caskroom/miniforge/base/etc/profile.d/conda.sh" \
+    "/opt/homebrew/anaconda3/etc/profile.d/conda.sh" \
+    "/usr/local/anaconda3/etc/profile.d/conda.sh"
   do
     if [ -f "$file" ]; then
       echo "$file"

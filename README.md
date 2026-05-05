@@ -1,8 +1,31 @@
 # MarkItDown Handy
 
+[![CI](https://github.com/Pluze/MarkItDown-Handy/actions/workflows/ci.yml/badge.svg)](https://github.com/Pluze/MarkItDown-Handy/actions/workflows/ci.yml)
+
 **Version:** 0.1.0
 
 MarkItDown Handy is a small macOS GUI for batch-converting files to Markdown with [Microsoft MarkItDown](https://github.com/microsoft/markitdown). It is designed for quick local conversion, scanned PDF OCR fallback, and simple release packaging.
+
+## Build status
+
+The current GitHub Actions workflow validates the source tree and builds the lightweight conda-wrapper macOS app on both Apple Silicon and Intel runners.
+
+Latest workflow: [CI](https://github.com/Pluze/MarkItDown-Handy/actions/workflows/ci.yml)
+
+Referenced run: [run 25404995828](https://github.com/Pluze/MarkItDown-Handy/actions/runs/25404995828) completed successfully for the validation job. That earlier run did not publish build artifacts; the current workflow adds macOS build jobs and uploads zip artifacts from `dist-conda/`.
+
+Expected CI artifacts:
+
+```text
+markitdown-handy-conda-wrapper-macos-arm64
+markitdown-handy-conda-wrapper-macos-x86_64
+```
+
+Each artifact contains the generated zip package:
+
+```text
+MarkItDown_Handy_v0.1.0_conda_wrapper_macOS_<arch>.zip
+```
 
 ## Features
 
@@ -18,6 +41,7 @@ MarkItDown Handy is a small macOS GUI for batch-converting files to Markdown wit
 ## Repository layout
 
 ```text
+.github/workflows/ci.yml                     Validate source and build macOS CI artifacts
 src/markitdown_handy.py                      Main Tkinter GUI
 scripts/run_from_source.sh                   Run locally from source
 scripts/setup_dev_env.sh                     Install/update local conda dependencies
@@ -75,6 +99,18 @@ Output:
 dist-portable/MarkItDown Handy Portable.app
 dist-portable/MarkItDown_Handy_v0.1.0_portable_macOS_<arch>.zip
 ```
+
+## CI build matrix
+
+The CI workflow currently runs:
+
+| Job | Runner | Purpose |
+| --- | --- | --- |
+| `Validate source tree` | `ubuntu-latest` | Python syntax check, zsh script syntax check, optional Python package build |
+| `Build conda-wrapper app (macOS arm64)` | `macos-14` | Build and upload Apple Silicon macOS zip |
+| `Build conda-wrapper app (macOS x86_64)` | `macos-15-intel` | Build and upload Intel macOS zip |
+
+The portable embedded app is still intended for release builds because it downloads and packs a full runtime, OCRmyPDF, Tesseract, Ghostscript, qpdf, and related dependencies.
 
 ## Diagnose the portable app
 
