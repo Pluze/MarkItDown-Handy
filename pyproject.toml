@@ -1,0 +1,15 @@
+[project]
+name = "markitdown-handy"
+version = "0.1.0"
+description = "A small macOS GUI for batch converting files to Markdown with Microsoft MarkItDown."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ziyu Zhu" }]
+dependencies = [
+  "markitdown[all]",
+  "tkinterdnd2",
+]
+
+[tool.ruff]
+line-length = 120

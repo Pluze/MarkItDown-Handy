@@ -1,0 +1,16 @@
+name: markitdown
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - ffmpeg
+  - ocrmypdf
+  - tesseract
+  - ghostscript
+  - qpdf
+  - pngquant
+  - unpaper
+  - pip:
+      - "markitdown[all]"
+      - tkinterdnd2
