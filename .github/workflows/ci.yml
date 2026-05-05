@@ -190,9 +190,43 @@ jobs:
       - name: Install OCR/PDF command line tools
         shell: pwsh
         run: |
-          choco install tesseract ghostscript qpdf -y --no-progress
-          echo "C:\Program Files\Tesseract-OCR" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          echo "C:\Program Files\gs\gs10.05.1\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $ErrorActionPreference = "Stop"
+
+          foreach ($package in @("tesseract", "ghostscript", "qpdf")) {
+            Write-Host "Installing $package via Chocolatey"
+            choco install $package -y --no-progress --limit-output --execution-timeout=1200
+          }
+
+          $PathCandidates = @(
+            "$env:ProgramFiles\Tesseract-OCR",
+            "$env:ProgramFiles\qpdf\bin"
+          )
+
+          $GhostscriptRoot = Join-Path $env:ProgramFiles "gs"
+          if (Test-Path $GhostscriptRoot) {
+            $LatestGhostscript = Get-ChildItem $GhostscriptRoot -Directory |
+              Sort-Object Name -Descending |
+              Select-Object -First 1
+            if ($LatestGhostscript) {
+              $PathCandidates += (Join-Path $LatestGhostscript.FullName "bin")
+            }
+          }
+
+          foreach ($candidate in $PathCandidates) {
+            if (Test-Path $candidate) {
+              $candidate | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              $env:PATH = "$candidate;$env:PATH"
+              Write-Host "Added tool path: $candidate"
+            }
+          }
+
+          foreach ($tool in @("tesseract.exe", "gswin64c.exe", "qpdf.exe")) {
+            $cmd = Get-Command $tool -ErrorAction SilentlyContinue
+            if (-not $cmd) {
+              throw "Required tool not found on PATH after install: $tool"
+            }
+            Write-Host "$tool => $($cmd.Source)"
+          }
 
       - name: Build portable Windows bundle
         shell: pwsh
