@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate source tree
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show repository layout
+        run: find . -maxdepth 3 -type f | sort
+
+      - name: Check Python syntax
+        run: |
+          set -euo pipefail
+          if find src -name '*.py' -type f 2>/dev/null | grep -q .; then
+            python -m compileall -q src
+          else
+            echo "No Python files found under src/. Skipping."
+          fi
+
+      - name: Check shell scripts
+        run: |
+          set -euo pipefail
+          if find scripts -name '*.sh' -type f 2>/dev/null | grep -q .; then
+            for script in scripts/*.sh; do
+              [ -f "$script" ] || continue
+              bash -n "$script"
+            done
+          else
+            echo "No shell scripts found under scripts/. Skipping."
+          fi
+
+      - name: Build Python package if pyproject exists
+        run: |
+          set -euo pipefail
+          if [ -f pyproject.toml ]; then
+            python -m pip install --upgrade pip build
+            python -m build --sdist --wheel
+          else
+            echo "No pyproject.toml found. Skipping package build."
+          fi
