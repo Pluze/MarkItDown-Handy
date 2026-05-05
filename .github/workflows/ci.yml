@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+
 jobs:
   validate:
     name: Validate source tree
@@ -21,7 +28,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install zsh for script checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh
 
       - name: Show repository layout
         run: find . -maxdepth 3 -type f | sort
@@ -35,14 +47,14 @@ jobs:
             echo "No Python files found under src/. Skipping."
           fi
 
-      - name: Check shell scripts
+      - name: Check zsh shell scripts
         run: |
           set -euo pipefail
           if find scripts -name '*.sh' -type f 2>/dev/null | grep -q .; then
-            for script in scripts/*.sh; do
-              [ -f "$script" ] || continue
-              bash -n "$script"
-            done
+            while IFS= read -r script; do
+              echo "Checking $script"
+              zsh -n "$script"
+            done < <(find scripts -name '*.sh' -type f | sort)
           else
             echo "No shell scripts found under scripts/. Skipping."
           fi
@@ -56,3 +68,43 @@ jobs:
           else
             echo "No pyproject.toml found. Skipping package build."
           fi
+
+  build-conda-wrapper:
+    name: Build conda-wrapper app (${{ matrix.target }})
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macOS arm64
+            runner: macos-14
+            artifact_name: markitdown-handy-conda-wrapper-macos-arm64
+          - target: macOS x86_64
+            runner: macos-15-intel
+            artifact_name: markitdown-handy-conda-wrapper-macos-x86_64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show runner information
+        run: |
+          sw_vers
+          uname -a
+          uname -m
+
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+
+      - name: Build conda-wrapper app
+        run: ./scripts/build_conda_wrapper_app.sh
+        shell: zsh --no-rcs {0}
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist-conda/*.zip
+          if-no-files-found: error
+          retention-days: 14
