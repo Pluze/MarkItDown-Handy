@@ -26,7 +26,9 @@ find_conda_sh() {
     "$HOME/anaconda3/etc/profile.d/conda.sh" \
     "$HOME/miniconda3/etc/profile.d/conda.sh" \
     "/opt/homebrew/Caskroom/miniforge/base/etc/profile.d/conda.sh" \
-    "/opt/homebrew/anaconda3/etc/profile.d/conda.sh"
+    "/usr/local/Caskroom/miniforge/base/etc/profile.d/conda.sh" \
+    "/opt/homebrew/anaconda3/etc/profile.d/conda.sh" \
+    "/usr/local/anaconda3/etc/profile.d/conda.sh"
   do
     if [ -f "$file" ]; then
       echo "$file"
@@ -48,10 +50,13 @@ mkdir -p "$BUILD_DIR" "$OUT_DIR"
 if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
   echo "Reusing conda environment: $ENV_NAME"
 else
-  conda create -y -n "$ENV_NAME" -c conda-forge \
-    "python=$PY_VERSION" \
-    pip conda-pack ffmpeg ocrmypdf tesseract ghostscript qpdf pngquant unpaper
+  conda create -y -n "$ENV_NAME" -c conda-forge "python=$PY_VERSION" pip
 fi
+
+# setup-miniconda may pre-create the environment with only Python. Always make sure
+# the native OCR/PDF tools and conda-pack are present before packaging.
+conda install -y -n "$ENV_NAME" -c conda-forge \
+  conda-pack ffmpeg ocrmypdf tesseract ghostscript qpdf pngquant unpaper
 
 conda activate "$ENV_NAME"
 python -m pip install -U pip
