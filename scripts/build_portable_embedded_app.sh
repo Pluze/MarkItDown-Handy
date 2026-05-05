@@ -61,8 +61,9 @@ conda install -y -n "$ENV_NAME" -c conda-forge \
   conda-pack ffmpeg tesseract ghostscript qpdf
 
 conda activate "$ENV_NAME"
-python -m pip install -U pip
-python -m pip install -U 'markitdown[all]' tkinterdnd2 ocrmypdf
+# Keep pip itself conda-managed. Upgrading pip with pip clobbers conda-managed
+# files and makes conda-pack fail before the app can be packaged.
+python -m pip install --no-cache-dir 'markitdown[all]' tkinterdnd2 ocrmypdf
 
 python - <<'PYCHECK'
 import importlib.util
