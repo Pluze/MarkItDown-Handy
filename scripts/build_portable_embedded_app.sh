@@ -55,12 +55,14 @@ fi
 
 # setup-miniconda may pre-create the environment with only Python. Always make sure
 # the native OCR/PDF tools and conda-pack are present before packaging.
+# OCRmyPDF itself is installed with pip because conda-forge's osx-arm64 solve can
+# require optional pngquant/unpaper packages that are not always available.
 conda install -y -n "$ENV_NAME" -c conda-forge \
-  conda-pack ffmpeg ocrmypdf tesseract ghostscript qpdf pngquant unpaper
+  conda-pack ffmpeg tesseract ghostscript qpdf
 
 conda activate "$ENV_NAME"
 python -m pip install -U pip
-python -m pip install -U 'markitdown[all]' tkinterdnd2
+python -m pip install -U 'markitdown[all]' tkinterdnd2 ocrmypdf
 
 python - <<'PYCHECK'
 import importlib.util
