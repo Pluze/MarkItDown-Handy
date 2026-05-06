@@ -15,7 +15,6 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.11"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   validate:
@@ -24,10 +23,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -101,7 +100,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Show runner information
         run: |
@@ -117,7 +116,7 @@ jobs:
         shell: zsh --no-rcs {0}
 
       - name: Upload app artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact_name }}
           path: dist-conda/*.zip
@@ -141,36 +140,45 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Set up Miniconda
-        uses: conda-incubator/setup-miniconda@v3
-        with:
-          miniforge-version: latest
-          python-version: ${{ env.PYTHON_VERSION }}
-          activate-environment: markitdown-handy-release
-          channels: conda-forge
-          channel-priority: strict
-          conda-remove-defaults: true
+      - name: Install Miniforge
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCH="$(uname -m)"
+          INSTALLER="Miniforge3-MacOSX-${ARCH}.sh"
+          URL="https://github.com/conda-forge/miniforge/releases/latest/download/${INSTALLER}"
+
+          curl -L "$URL" -o "$INSTALLER"
+          bash "$INSTALLER" -b -p "$HOME/miniconda3"
+          source "$HOME/miniconda3/etc/profile.d/conda.sh"
+
+          conda config --system --remove channels defaults || true
+          conda config --system --add channels conda-forge
+          conda config --system --set channel_priority strict
+          conda create -y -n markitdown-handy-release "python=${PYTHON_VERSION}" pip
 
       - name: Show runner information
-        shell: bash -el {0}
+        shell: bash
         run: |
+          source "$HOME/miniconda3/etc/profile.d/conda.sh"
           sw_vers
           uname -a
           uname -m
           conda info
+          conda config --show channels
 
       - name: Make scripts executable
-        shell: bash -el {0}
+        shell: bash
         run: chmod +x scripts/*.sh
 
       - name: Build full portable macOS app
-        shell: bash -el {0}
+        shell: bash
         run: python scripts/build_cross_platform_portable.py
 
       - name: Upload portable artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact_name }}
           path: dist-portable/*.zip
@@ -184,10 +192,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -237,7 +245,7 @@ jobs:
         run: python scripts/build_cross_platform_portable.py
 
       - name: Upload Windows portable artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: markitdown-handy-portable-windows-x64
           path: dist-windows/*.zip
