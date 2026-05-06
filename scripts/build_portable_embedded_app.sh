@@ -26,7 +26,9 @@ find_conda_sh() {
     "$HOME/anaconda3/etc/profile.d/conda.sh" \
     "$HOME/miniconda3/etc/profile.d/conda.sh" \
     "/opt/homebrew/Caskroom/miniforge/base/etc/profile.d/conda.sh" \
-    "/opt/homebrew/anaconda3/etc/profile.d/conda.sh"
+    "/usr/local/Caskroom/miniforge/base/etc/profile.d/conda.sh" \
+    "/opt/homebrew/anaconda3/etc/profile.d/conda.sh" \
+    "/usr/local/anaconda3/etc/profile.d/conda.sh"
   do
     if [ -f "$file" ]; then
       echo "$file"
@@ -48,14 +50,20 @@ mkdir -p "$BUILD_DIR" "$OUT_DIR"
 if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
   echo "Reusing conda environment: $ENV_NAME"
 else
-  conda create -y -n "$ENV_NAME" -c conda-forge \
-    "python=$PY_VERSION" \
-    pip conda-pack ffmpeg ocrmypdf tesseract ghostscript qpdf pngquant unpaper
+  conda create -y -n "$ENV_NAME" -c conda-forge "python=$PY_VERSION" pip
 fi
 
+# setup-miniconda may pre-create the environment with only Python. Always make sure
+# the native OCR/PDF tools and conda-pack are present before packaging.
+# OCRmyPDF itself is installed with pip because conda-forge's osx-arm64 solve can
+# require optional pngquant/unpaper packages that are not always available.
+conda install -y -n "$ENV_NAME" -c conda-forge \
+  conda-pack ffmpeg tesseract ghostscript qpdf
+
 conda activate "$ENV_NAME"
-python -m pip install -U pip
-python -m pip install -U 'markitdown[all]' tkinterdnd2
+# Keep pip itself conda-managed. Upgrading pip with pip clobbers conda-managed
+# files and makes conda-pack fail before the app can be packaged.
+python -m pip install --no-cache-dir 'markitdown[all]' tkinterdnd2 ocrmypdf
 
 python - <<'PYCHECK'
 import importlib.util

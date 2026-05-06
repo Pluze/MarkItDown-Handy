@@ -4,28 +4,33 @@
 
 **Version:** 0.1.0
 
-MarkItDown Handy is a small macOS GUI for batch-converting files to Markdown with [Microsoft MarkItDown](https://github.com/microsoft/markitdown). It is designed for quick local conversion, scanned PDF OCR fallback, and simple release packaging.
+MarkItDown Handy is a small local GUI for batch-converting files to Markdown with [Microsoft MarkItDown](https://github.com/microsoft/markitdown). It is designed for quick local conversion, scanned PDF OCR fallback, and simple release packaging.
 
 ## Build status
 
-The current GitHub Actions workflow validates the source tree and builds the lightweight conda-wrapper macOS app on both Apple Silicon and Intel runners.
+The GitHub Actions workflow validates the source tree and builds release artifacts for multiple targets.
 
 Latest workflow: [CI](https://github.com/Pluze/MarkItDown-Handy/actions/workflows/ci.yml)
-
-Referenced run: [run 25404995828](https://github.com/Pluze/MarkItDown-Handy/actions/runs/25404995828) completed successfully for the validation job. That earlier run did not publish build artifacts; the current workflow adds macOS build jobs and uploads zip artifacts from `dist-conda/`.
 
 Expected CI artifacts:
 
 ```text
 markitdown-handy-conda-wrapper-macos-arm64
 markitdown-handy-conda-wrapper-macos-x86_64
+markitdown-handy-portable-macos-arm64
+markitdown-handy-portable-macos-x86_64
+markitdown-handy-portable-windows-x64
 ```
 
-Each artifact contains the generated zip package:
+Artifact package names:
 
 ```text
 MarkItDown_Handy_v0.1.0_conda_wrapper_macOS_<arch>.zip
+MarkItDown_Handy_v0.1.0_portable_macOS_<arch>.zip
+MarkItDown_Handy_v0.1.0_portable_Windows_x64.zip
 ```
+
+The macOS portable builds embed a conda-packed runtime with MarkItDown, OCRmyPDF, Tesseract, Ghostscript, qpdf, and related dependencies. The Windows portable build creates a zip bundle with a private Python runtime, MarkItDown, OCRmyPDF, launcher scripts, and best-effort copies of OCR/PDF command line tools available on the CI runner.
 
 ## Features
 
@@ -36,22 +41,26 @@ MarkItDown_Handy_v0.1.0_conda_wrapper_macOS_<arch>.zip
 - Falls back to OCR for scanned or weak PDF output when enabled.
 - Shows queue status, current step, progress bars, and live logs.
 - Does **not** overwrite existing output files. Existing names are resolved as `name_1.md`, `name_2.md`, etc.
-- Builds either a small conda-wrapper app or a fully portable app with embedded dependencies.
+- Builds lightweight macOS conda-wrapper apps and portable macOS/Windows bundles.
 
 ## Repository layout
 
 ```text
-.github/workflows/ci.yml                     Validate source and build macOS CI artifacts
+.github/workflows/ci.yml                     Validate source and build CI artifacts
 src/markitdown_handy.py                      Main Tkinter GUI
 scripts/run_from_source.sh                   Run locally from source
 scripts/setup_dev_env.sh                     Install/update local conda dependencies
-scripts/build_conda_wrapper_app.sh           Build small app using existing conda env
-scripts/build_portable_embedded_app.sh       Build portable app with embedded runtime
-scripts/build_both_apps.sh                   Build both app variants
-scripts/diagnose_portable_app.sh             Diagnose portable app dependencies
+scripts/build_conda_wrapper_app.sh           Build small macOS app using existing conda env
+scripts/build_portable_embedded_app.sh       Build full portable macOS app with embedded runtime
+scripts/build_windows_portable.ps1           Build portable Windows zip bundle
+scripts/build_cross_platform_portable.py     Dispatch portable build for the current OS
+scripts/build_both_apps.sh                   Build supported local packages for the current OS
+scripts/diagnose_portable_app.sh             Diagnose portable macOS app dependencies
 ```
 
 ## Quick start from source
+
+macOS / Linux shell:
 
 ```bash
 conda create -n markitdown python=3.11 -y
@@ -67,7 +76,17 @@ If you already have a `markitdown` conda environment, run:
 ./scripts/run_from_source.sh
 ```
 
-## Build the conda-wrapper app
+Windows PowerShell:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install "markitdown[all]" tkinterdnd2 ocrmypdf
+python .\src\markitdown_handy.py
+```
+
+## Build the macOS conda-wrapper app
 
 This app is small, but the target Mac must have the `markitdown` conda environment and OCR tools installed.
 
@@ -83,7 +102,7 @@ dist-conda/MarkItDown Handy.app
 dist-conda/MarkItDown_Handy_v0.1.0_conda_wrapper_macOS_<arch>.zip
 ```
 
-## Build the portable app
+## Build the full portable macOS app
 
 This app embeds Python, MarkItDown, OCRmyPDF, Tesseract, Ghostscript, qpdf, and related dependencies. The target Mac does not need conda or Homebrew, but it must match the CPU architecture used for building.
 
@@ -100,19 +119,57 @@ dist-portable/MarkItDown Handy Portable.app
 dist-portable/MarkItDown_Handy_v0.1.0_portable_macOS_<arch>.zip
 ```
 
+## Build the portable Windows bundle
+
+From Windows PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_windows_portable.ps1
+```
+
+Output:
+
+```text
+dist-windows/MarkItDown Handy Portable/
+dist-windows/MarkItDown_Handy_v0.1.0_portable_Windows_x64.zip
+```
+
+The Windows bundle includes a private Python runtime and launchers:
+
+```text
+MarkItDown Handy.cmd
+MarkItDown Handy.ps1
+```
+
+## Cross-platform portable build entry point
+
+Use the dispatcher when you want one command that chooses the current platform's portable build:
+
+```bash
+python scripts/build_cross_platform_portable.py
+```
+
+Currently supported:
+
+| Platform | Portable output |
+| --- | --- |
+| macOS arm64 / x86_64 | `.app` zip under `dist-portable/` |
+| Windows x64 | zip bundle under `dist-windows/` |
+
 ## CI build matrix
 
 The CI workflow currently runs:
 
 | Job | Runner | Purpose |
 | --- | --- | --- |
-| `Validate source tree` | `ubuntu-latest` | Python syntax check, zsh script syntax check, optional Python package build |
-| `Build conda-wrapper app (macOS arm64)` | `macos-14` | Build and upload Apple Silicon macOS zip |
-| `Build conda-wrapper app (macOS x86_64)` | `macos-15-intel` | Build and upload Intel macOS zip |
+| `Validate source tree` | `ubuntu-latest` | Python syntax check, zsh script syntax check, PowerShell syntax check, optional Python package build |
+| `Build conda-wrapper app (macOS arm64)` | `macos-14` | Build and upload Apple Silicon macOS conda-wrapper zip |
+| `Build conda-wrapper app (macOS x86_64)` | `macos-15-intel` | Build and upload Intel macOS conda-wrapper zip |
+| `Build full portable app (macOS arm64)` | `macos-14` | Build and upload Apple Silicon full portable macOS zip |
+| `Build full portable app (macOS x86_64)` | `macos-15-intel` | Build and upload Intel full portable macOS zip |
+| `Build portable Windows bundle` | `windows-latest` | Build and upload Windows portable zip bundle |
 
-The portable embedded app is still intended for release builds because it downloads and packs a full runtime, OCRmyPDF, Tesseract, Ghostscript, qpdf, and related dependencies.
-
-## Diagnose the portable app
+## Diagnose the portable macOS app
 
 ```bash
 ./scripts/diagnose_portable_app.sh "dist-portable/MarkItDown Handy Portable.app"
@@ -128,9 +185,10 @@ tkinterdnd2 OK
 
 ## Notes for GitHub release
 
-- The portable app is architecture-specific: build separately for `arm64` and `x86_64` if you need both.
-- The portable app can be large because it embeds a full runtime.
-- For public distribution, sign and notarize the `.app` with an Apple Developer ID.
+- Portable builds are architecture-specific: build separately for `arm64` and `x86_64` on macOS.
+- Full portable packages can be large because they embed a runtime and OCR/PDF dependencies.
+- For public macOS distribution, sign and notarize the `.app` with an Apple Developer ID.
+- Windows zip bundles are unsigned; users may need to approve the app in Windows security prompts.
 - This project does not modify MarkItDown; it only provides a local GUI wrapper and packaging scripts.
 
 ## License
