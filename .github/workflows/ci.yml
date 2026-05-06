@@ -15,6 +15,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.11"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   validate:
@@ -145,9 +146,12 @@ jobs:
       - name: Set up Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:
+          miniforge-version: latest
           python-version: ${{ env.PYTHON_VERSION }}
-          auto-update-conda: true
           activate-environment: markitdown-handy-release
+          channels: conda-forge
+          channel-priority: strict
+          conda-remove-defaults: true
 
       - name: Show runner information
         shell: bash -el {0}
@@ -176,7 +180,7 @@ jobs:
   build-portable-windows:
     name: Build portable Windows bundle
     needs: validate
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout
