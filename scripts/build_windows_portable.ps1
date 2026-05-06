@@ -48,25 +48,30 @@ if (-not (Test-Path $Installer)) {
 }
 
 Write-Host "Installing private Python runtime into $RuntimeDir"
-$InstallArgs = @(
-    "/quiet",
-    "InstallAllUsers=0",
-    "TargetDir=$RuntimeDir",
-    "Include_pip=1",
-    "Include_tcltk=1",
-    "Include_launcher=0",
-    "InstallLauncherAllUsers=0",
-    "PrependPath=0",
-    "Shortcuts=0",
-    "Include_test=0"
-)
-$Process = Start-Process -FilePath $Installer -ArgumentList $InstallArgs -Wait -PassThru
-if ($Process.ExitCode -ne 0) {
-    throw "Python installer failed with exit code $($Process.ExitCode)"
+# Call the installer directly so PowerShell preserves TargetDir as one quoted
+# argument. Start-Process -ArgumentList can flatten arrays in a way that lets
+# spaces in `MarkItDown Handy Portable` truncate the target path.
+& $Installer `
+    /quiet `
+    InstallAllUsers=0 `
+    "TargetDir=$RuntimeDir" `
+    Include_pip=1 `
+    Include_tcltk=1 `
+    Include_launcher=0 `
+    InstallLauncherAllUsers=0 `
+    PrependPath=0 `
+    Shortcuts=0 `
+    Include_test=0
+if ($LASTEXITCODE -ne 0) {
+    throw "Python installer failed with exit code $LASTEXITCODE"
 }
 
 $Python = Join-Path $RuntimeDir "python.exe"
 if (-not (Test-Path $Python)) {
+    Write-Host "Python runtime files found under bundle directory:"
+    Get-ChildItem $BundleDir -Recurse -Filter python.exe -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Host "- $($_.FullName)"
+    }
     throw "Bundled Python was not installed at expected path: $Python"
 }
 
@@ -87,8 +92,10 @@ if "hostedtoolcache" in str(runtime).lower():
 print(f"Python module check OK: {sys.executable}")
 '@ | & $Python -
 
-# Patch only the bundled copy so the Windows portable app can use runtime\Scripts,
-# runtime\python.exe, and Windows shell quoting without changing source-tree defaults.
+# Patch only the bundled copy so the Windows portable app can use runtime\python.exe
+# and Windows shell quoting without changing source-tree defaults. Prefer
+# `python -m ...` over pip-generated console .exe files because console launchers
+# can contain absolute CI build paths.
 @'
 from __future__ import annotations
 
@@ -105,23 +112,19 @@ replacement = r'''def _shell_quote(value):
     return shlex.quote(str(value))
 
 
-def _bundled_bin_dir(env_dir):
-    scripts_dir = env_dir / "Scripts"
-    if scripts_dir.exists():
-        return scripts_dir
-    return env_dir / "bin"
-
-
 def _bundled_executable(env_dir, name):
     candidates = []
-    names = [name]
     if os.name == "nt":
-        names = [f"{name}.exe", f"{name}.bat", f"{name}.cmd", name]
-        for item in names:
-            candidates.append(env_dir / item)
-    bin_dir = _bundled_bin_dir(env_dir)
-    for item in names:
-        candidates.append(bin_dir / item)
+        suffixes = [".exe", ".bat", ".cmd", ""]
+        search_dirs = [env_dir, env_dir / "bin", env_dir / "Scripts"]
+    else:
+        suffixes = [""]
+        search_dirs = [env_dir / "bin", env_dir]
+
+    for search_dir in search_dirs:
+        for suffix in suffixes:
+            candidates.append(search_dir / f"{name}{suffix}")
+
     for candidate in candidates:
         if candidate.exists():
             return candidate
@@ -131,12 +134,12 @@ def _bundled_executable(env_dir, name):
 def find_ocrmypdf_executable():
     env_dir = bundled_env_dir()
     if env_dir is not None:
-        bundled_cli = _bundled_executable(env_dir, "ocrmypdf")
         bundled_python = _bundled_executable(env_dir, "python")
-        if bundled_cli is not None:
-            return _shell_quote(bundled_cli)
         if bundled_python is not None:
             return f"{_shell_quote(bundled_python)} -m ocrmypdf"
+        bundled_cli = _bundled_executable(env_dir, "ocrmypdf")
+        if bundled_cli is not None:
+            return _shell_quote(bundled_cli)
 
     candidates = [
         "/opt/homebrew/bin/ocrmypdf",
@@ -151,12 +154,12 @@ def find_ocrmypdf_executable():
 def default_markitdown_command():
     env_dir = bundled_env_dir()
     if env_dir is not None:
-        bundled_cli = _bundled_executable(env_dir, "markitdown")
         bundled_python = _bundled_executable(env_dir, "python")
-        if bundled_cli is not None:
-            return _shell_quote(bundled_cli)
         if bundled_python is not None:
             return f"{_shell_quote(bundled_python)} -m markitdown"
+        bundled_cli = _bundled_executable(env_dir, "markitdown")
+        if bundled_cli is not None:
+            return _shell_quote(bundled_cli)
     return f"{_shell_quote(find_conda_executable())} run -n {CONDA_ENV_NAME} markitdown"
 
 
@@ -167,8 +170,7 @@ def add_gui_paths(env):
 
     env_dir = bundled_env_dir()
     if env_dir is not None:
-        bin_dir = _bundled_bin_dir(env_dir)
-        extra_paths.extend([str(env_dir), str(bin_dir)])
+        extra_paths.extend([str(env_dir), str(env_dir / "bin"), str(env_dir / "Scripts")])
         tools_dir = resource_dir() / "tools"
         if tools_dir.exists():
             extra_paths.append(str(tools_dir))
@@ -198,7 +200,6 @@ path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
 '@ | & $Python - $AppSource
 
 $RuntimePython = Join-Path $RuntimeDir "python.exe"
-$RuntimeScripts = Join-Path $RuntimeDir "Scripts"
 
 $LauncherCmd = Join-Path $BundleDir "MarkItDown Handy.cmd"
 @"
@@ -210,7 +211,7 @@ set "MARKITDOWN_RESOURCE_DIR=%APP_DIR%"
 set "PYTHONNOUSERSITE=1"
 set "PYTHONHOME="
 set "PYTHONPATH="
-set "PATH=%APP_DIR%tools;%APP_DIR%runtime;%APP_DIR%runtime\Scripts;%PATH%"
+set "PATH=%APP_DIR%tools;%APP_DIR%runtime;%APP_DIR%runtime\bin;%APP_DIR%runtime\Scripts;%PATH%"
 if exist "%APP_DIR%tessdata" set "TESSDATA_PREFIX=%APP_DIR%tessdata"
 "%APP_DIR%runtime\python.exe" "%APP_DIR%app\markitdown_handy.py"
 endlocal
@@ -224,7 +225,7 @@ $LauncherPs1 = Join-Path $BundleDir "MarkItDown Handy.ps1"
 `$env:PYTHONNOUSERSITE = '1'
 Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue
 Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
-`$env:PATH = (Join-Path `$AppDir 'tools') + ';' + (Join-Path `$AppDir 'runtime') + ';' + (Join-Path `$AppDir 'runtime\Scripts') + ';' + `$env:PATH
+`$env:PATH = (Join-Path `$AppDir 'tools') + ';' + (Join-Path `$AppDir 'runtime') + ';' + (Join-Path `$AppDir 'runtime\bin') + ';' + (Join-Path `$AppDir 'runtime\Scripts') + ';' + `$env:PATH
 `$Tessdata = Join-Path `$AppDir 'tessdata'
 if (Test-Path `$Tessdata) { `$env:TESSDATA_PREFIX = `$Tessdata }
 & (Join-Path `$AppDir 'runtime\python.exe') (Join-Path `$AppDir 'app\markitdown_handy.py')
