@@ -3,6 +3,7 @@
 
 param(
     [string]$PythonVersion = $env:PY_VERSION,
+    [string]$PythonFullVersion = $env:PYTHON_FULL_VERSION,
     [string]$AppVersion = "0.1.0"
 )
 
@@ -10,6 +11,13 @@ $ErrorActionPreference = "Stop"
 
 if ([string]::IsNullOrWhiteSpace($PythonVersion)) {
     $PythonVersion = "3.11"
+}
+if ([string]::IsNullOrWhiteSpace($PythonFullVersion)) {
+    if ($PythonVersion -match '^\d+\.\d+\.\d+$') {
+        $PythonFullVersion = $PythonVersion
+    } else {
+        $PythonFullVersion = "3.11.9"
+    }
 }
 
 $RootDir = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -29,14 +37,37 @@ New-Item -ItemType Directory -Force $BuildDir, $OutDir, $RuntimeDir, $AppDir, $T
 $AppSource = Join-Path $AppDir "markitdown_handy.py"
 Copy-Item $Src $AppSource -Force
 
-$VenvDir = Join-Path $BuildDir "venv"
-if (-not (Test-Path $VenvDir)) {
-    py -$PythonVersion -m venv $VenvDir
+# Do not copy a venv from the CI runner. Windows venvs keep absolute references
+# to the original base Python path, which breaks after the bundle is moved.
+# Instead, install a private Python distribution directly inside runtime/.
+$Installer = Join-Path $BuildDir "python-$PythonFullVersion-amd64.exe"
+$InstallerUrl = "https://www.python.org/ftp/python/$PythonFullVersion/python-$PythonFullVersion-amd64.exe"
+if (-not (Test-Path $Installer)) {
+    Write-Host "Downloading Python runtime installer: $InstallerUrl"
+    Invoke-WebRequest -Uri $InstallerUrl -OutFile $Installer
 }
 
-$Python = Join-Path $VenvDir "Scripts\python.exe"
+Write-Host "Installing private Python runtime into $RuntimeDir"
+$InstallArgs = @(
+    "/quiet",
+    "InstallAllUsers=0",
+    "TargetDir=$RuntimeDir",
+    "Include_pip=1",
+    "Include_tcltk=1",
+    "Include_launcher=0",
+    "InstallLauncherAllUsers=0",
+    "PrependPath=0",
+    "Shortcuts=0",
+    "Include_test=0"
+)
+$Process = Start-Process -FilePath $Installer -ArgumentList $InstallArgs -Wait -PassThru
+if ($Process.ExitCode -ne 0) {
+    throw "Python installer failed with exit code $($Process.ExitCode)"
+}
+
+$Python = Join-Path $RuntimeDir "python.exe"
 if (-not (Test-Path $Python)) {
-    $Python = "python"
+    throw "Bundled Python was not installed at expected path: $Python"
 }
 
 & $Python -m pip install --upgrade pip
@@ -44,14 +75,20 @@ if (-not (Test-Path $Python)) {
 
 @'
 import importlib.util
-missing = [m for m in ["markitdown", "tkinterdnd2", "ocrmypdf"] if not importlib.util.find_spec(m)]
+import sys
+from pathlib import Path
+
+runtime = Path(sys.executable).resolve().parent
+missing = [m for m in ["markitdown", "tkinterdnd2", "ocrmypdf", "tkinter"] if not importlib.util.find_spec(m)]
 if missing:
     raise SystemExit(f"Missing required modules: {missing}")
-print("Python module check OK")
+if "hostedtoolcache" in str(runtime).lower():
+    raise SystemExit(f"Runtime is still using the GitHub hosted toolcache: {runtime}")
+print(f"Python module check OK: {sys.executable}")
 '@ | & $Python -
 
-# Patch only the bundled copy so the Windows portable app can use runtime\Scripts
-# and Windows shell quoting without changing the source-tree default behavior.
+# Patch only the bundled copy so the Windows portable app can use runtime\Scripts,
+# runtime\python.exe, and Windows shell quoting without changing source-tree defaults.
 @'
 from __future__ import annotations
 
@@ -76,12 +113,16 @@ def _bundled_bin_dir(env_dir):
 
 
 def _bundled_executable(env_dir, name):
-    bin_dir = _bundled_bin_dir(env_dir)
+    candidates = []
     names = [name]
     if os.name == "nt":
         names = [f"{name}.exe", f"{name}.bat", f"{name}.cmd", name]
+        for item in names:
+            candidates.append(env_dir / item)
+    bin_dir = _bundled_bin_dir(env_dir)
     for item in names:
-        candidate = bin_dir / item
+        candidates.append(bin_dir / item)
+    for candidate in candidates:
         if candidate.exists():
             return candidate
     return None
@@ -127,16 +168,12 @@ def add_gui_paths(env):
     env_dir = bundled_env_dir()
     if env_dir is not None:
         bin_dir = _bundled_bin_dir(env_dir)
-        extra_paths.append(str(bin_dir))
+        extra_paths.extend([str(env_dir), str(bin_dir)])
         tools_dir = resource_dir() / "tools"
         if tools_dir.exists():
             extra_paths.append(str(tools_dir))
 
-        if os.name == "nt":
-            dll_dirs = [str(env_dir), str(bin_dir)]
-            old_path = env.get("PATH", "")
-            env["PATH"] = path_sep.join(extra_paths + dll_dirs + ([old_path] if old_path else []))
-        else:
+        if os.name != "nt":
             old_dyld = env.get("DYLD_LIBRARY_PATH", "")
             env["DYLD_LIBRARY_PATH"] = path_sep.join([str(env_dir / "lib")] + ([old_dyld] if old_dyld else []))
 
@@ -160,9 +197,7 @@ def add_gui_paths(env):
 path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
 '@ | & $Python - $AppSource
 
-Copy-Item -Recurse -Force (Join-Path $VenvDir "*") $RuntimeDir
-
-$RuntimePython = Join-Path $RuntimeDir "Scripts\python.exe"
+$RuntimePython = Join-Path $RuntimeDir "python.exe"
 $RuntimeScripts = Join-Path $RuntimeDir "Scripts"
 
 $LauncherCmd = Join-Path $BundleDir "MarkItDown Handy.cmd"
@@ -173,9 +208,11 @@ set "APP_DIR=%~dp0"
 set "MARKITDOWN_BUNDLED_ENV=%APP_DIR%runtime"
 set "MARKITDOWN_RESOURCE_DIR=%APP_DIR%"
 set "PYTHONNOUSERSITE=1"
-set "PATH=%APP_DIR%tools;%APP_DIR%runtime\Scripts;%APP_DIR%runtime;%PATH%"
+set "PYTHONHOME="
+set "PYTHONPATH="
+set "PATH=%APP_DIR%tools;%APP_DIR%runtime;%APP_DIR%runtime\Scripts;%PATH%"
 if exist "%APP_DIR%tessdata" set "TESSDATA_PREFIX=%APP_DIR%tessdata"
-"%APP_DIR%runtime\Scripts\python.exe" "%APP_DIR%app\markitdown_handy.py"
+"%APP_DIR%runtime\python.exe" "%APP_DIR%app\markitdown_handy.py"
 endlocal
 "@ | Set-Content -Encoding ASCII $LauncherCmd
 
@@ -185,23 +222,24 @@ $LauncherPs1 = Join-Path $BundleDir "MarkItDown Handy.ps1"
 `$env:MARKITDOWN_BUNDLED_ENV = Join-Path `$AppDir 'runtime'
 `$env:MARKITDOWN_RESOURCE_DIR = `$AppDir
 `$env:PYTHONNOUSERSITE = '1'
-`$env:PATH = (Join-Path `$AppDir 'tools') + ';' + (Join-Path `$AppDir 'runtime\Scripts') + ';' + (Join-Path `$AppDir 'runtime') + ';' + `$env:PATH
+Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue
+Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+`$env:PATH = (Join-Path `$AppDir 'tools') + ';' + (Join-Path `$AppDir 'runtime') + ';' + (Join-Path `$AppDir 'runtime\Scripts') + ';' + `$env:PATH
 `$Tessdata = Join-Path `$AppDir 'tessdata'
 if (Test-Path `$Tessdata) { `$env:TESSDATA_PREFIX = `$Tessdata }
-& (Join-Path `$AppDir 'runtime\Scripts\python.exe') (Join-Path `$AppDir 'app\markitdown_handy.py')
+& (Join-Path `$AppDir 'runtime\python.exe') (Join-Path `$AppDir 'app\markitdown_handy.py')
 "@ | Set-Content -Encoding UTF8 $LauncherPs1
 
 $RuntimeBin = Join-Path $RuntimeDir "bin"
 New-Item -ItemType Directory -Force $RuntimeBin | Out-Null
 @"
 @echo off
-"%~dp0..\Scripts\python.exe" -m markitdown %*
+"%~dp0..\python.exe" -m markitdown %*
 "@ | Set-Content -Encoding ASCII (Join-Path $RuntimeBin "markitdown.bat")
 @"
 @echo off
-"%~dp0..\Scripts\python.exe" -m ocrmypdf %*
+"%~dp0..\python.exe" -m ocrmypdf %*
 "@ | Set-Content -Encoding ASCII (Join-Path $RuntimeBin "ocrmypdf.bat")
-Copy-Item -Force (Join-Path $RuntimeScripts "python.exe") (Join-Path $RuntimeBin "python.exe")
 
 $ToolNames = @(
     "tesseract.exe",
@@ -237,10 +275,15 @@ foreach ($candidate in $TessCandidates) {
 
 @'
 import importlib.util
-for mod in ["markitdown", "tkinterdnd2", "ocrmypdf"]:
+import sys
+from pathlib import Path
+runtime = Path(sys.executable).resolve().parent
+for mod in ["markitdown", "tkinterdnd2", "ocrmypdf", "tkinter"]:
     if not importlib.util.find_spec(mod):
         raise SystemExit(f"Bundled module missing: {mod}")
-print("Bundled runtime check OK")
+if "hostedtoolcache" in str(runtime).lower():
+    raise SystemExit(f"Bundled runtime is not portable: {runtime}")
+print(f"Bundled runtime check OK: {sys.executable}")
 '@ | & $RuntimePython -
 
 $ZipPath = Join-Path $OutDir "MarkItDown_Handy_v${AppVersion}_portable_Windows_${Arch}.zip"
