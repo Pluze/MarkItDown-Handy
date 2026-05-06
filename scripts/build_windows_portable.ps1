@@ -30,16 +30,19 @@ $RuntimeDir = Join-Path $BundleDir "runtime"
 $AppDir = Join-Path $BundleDir "app"
 $ToolsDir = Join-Path $BundleDir "tools"
 $TessdataDir = Join-Path $BundleDir "tessdata"
+$BuildRuntimeDir = Join-Path $BuildDir "python-runtime"
 $Arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
 
 Remove-Item -Recurse -Force $BundleDir -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $BuildRuntimeDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $BuildDir, $OutDir, $RuntimeDir, $AppDir, $ToolsDir, $TessdataDir | Out-Null
 $AppSource = Join-Path $AppDir "markitdown_handy.py"
 Copy-Item $Src $AppSource -Force
 
 # Do not copy a venv from the CI runner. Windows venvs keep absolute references
 # to the original base Python path, which breaks after the bundle is moved.
-# Instead, install a private Python distribution directly inside runtime/.
+# Install Python into a temporary path without spaces, install dependencies there,
+# then copy the finished runtime into the portable bundle.
 $Installer = Join-Path $BuildDir "python-$PythonFullVersion-amd64.exe"
 $InstallerUrl = "https://www.python.org/ftp/python/$PythonFullVersion/python-$PythonFullVersion-amd64.exe"
 if (-not (Test-Path $Installer)) {
@@ -47,29 +50,28 @@ if (-not (Test-Path $Installer)) {
     Invoke-WebRequest -Uri $InstallerUrl -OutFile $Installer
 }
 
-Write-Host "Installing private Python runtime into $RuntimeDir"
-# Call the installer directly so PowerShell preserves TargetDir as one quoted
-# argument. Start-Process -ArgumentList can flatten arrays in a way that lets
-# spaces in `MarkItDown Handy Portable` truncate the target path.
-& $Installer `
-    /quiet `
-    InstallAllUsers=0 `
-    "TargetDir=$RuntimeDir" `
-    Include_pip=1 `
-    Include_tcltk=1 `
-    Include_launcher=0 `
-    InstallLauncherAllUsers=0 `
-    PrependPath=0 `
-    Shortcuts=0 `
-    Include_test=0
-if ($LASTEXITCODE -ne 0) {
-    throw "Python installer failed with exit code $LASTEXITCODE"
+Write-Host "Installing private Python runtime into temporary path: $BuildRuntimeDir"
+$InstallArgs = @(
+    "/quiet",
+    "InstallAllUsers=0",
+    "TargetDir=$BuildRuntimeDir",
+    "Include_pip=1",
+    "Include_tcltk=1",
+    "Include_launcher=0",
+    "InstallLauncherAllUsers=0",
+    "PrependPath=0",
+    "Shortcuts=0",
+    "Include_test=0"
+)
+$Process = Start-Process -FilePath $Installer -ArgumentList $InstallArgs -Wait -PassThru
+if ($Process.ExitCode -ne 0) {
+    throw "Python installer failed with exit code $($Process.ExitCode)"
 }
 
-$Python = Join-Path $RuntimeDir "python.exe"
+$Python = Join-Path $BuildRuntimeDir "python.exe"
 if (-not (Test-Path $Python)) {
-    Write-Host "Python runtime files found under bundle directory:"
-    Get-ChildItem $BundleDir -Recurse -Filter python.exe -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host "Python runtime files found under build directory:"
+    Get-ChildItem $BuildDir -Recurse -Filter python.exe -ErrorAction SilentlyContinue | ForEach-Object {
         Write-Host "- $($_.FullName)"
     }
     throw "Bundled Python was not installed at expected path: $Python"
@@ -91,6 +93,16 @@ if "hostedtoolcache" in str(runtime).lower():
     raise SystemExit(f"Runtime is still using the GitHub hosted toolcache: {runtime}")
 print(f"Python module check OK: {sys.executable}")
 '@ | & $Python -
+
+Write-Host "Copying prepared Python runtime into bundle: $RuntimeDir"
+Remove-Item -Recurse -Force $RuntimeDir -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $RuntimeDir | Out-Null
+Copy-Item -Recurse -Force (Join-Path $BuildRuntimeDir "*") $RuntimeDir
+
+$Python = Join-Path $RuntimeDir "python.exe"
+if (-not (Test-Path $Python)) {
+    throw "Runtime copy failed; missing $Python"
+}
 
 # Patch only the bundled copy so the Windows portable app can use runtime\python.exe
 # and Windows shell quoting without changing source-tree defaults. Prefer
